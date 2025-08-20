@@ -2,13 +2,14 @@ import type { ToolUse } from "@core/assistant-message"
 import { formatResponse } from "@core/prompts/responses"
 import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { showSystemNotification } from "@integrations/notifications"
+import { ClineAsk } from "@shared/ExtensionMessage"
 import { createAndOpenGitHubIssue } from "@utils/github-url-utils"
 import * as os from "os"
 import * as vscode from "vscode"
 import type { ToolResponse } from "../../index"
-import type { IToolHandler } from "../ToolExecutorCoordinator"
+import type { IPartialBlockHandler, IToolHandler, UIHelpers } from "../ToolExecutorCoordinator"
 
-export class ReportBugHandler implements IToolHandler {
+export class ReportBugHandler implements IToolHandler, IPartialBlockHandler {
 	readonly name = "report_bug"
 
 	constructor() {}
@@ -119,5 +120,18 @@ export class ReportBugHandler implements IToolHandler {
 
 			return formatResponse.toolResult(`The user accepted the creation of the Github issue.`)
 		}
+	}
+
+	async handlePartialBlock(block: ToolUse, uiHelpers: UIHelpers): Promise<void> {
+		const partialMessage = JSON.stringify({
+			title: uiHelpers.removeClosingTag(block, "title", block.params.title),
+			what_happened: uiHelpers.removeClosingTag(block, "what_happened", block.params.what_happened),
+			steps_to_reproduce: uiHelpers.removeClosingTag(block, "steps_to_reproduce", block.params.steps_to_reproduce),
+			api_request_output: uiHelpers.removeClosingTag(block, "api_request_output", block.params.api_request_output),
+			additional_context: uiHelpers.removeClosingTag(block, "additional_context", block.params.additional_context),
+		})
+
+		await uiHelpers.removeLastPartialMessageIfExistsWithType("say", "report_bug")
+		await uiHelpers.ask("report_bug" as ClineAsk, partialMessage, block.partial).catch(() => {})
 	}
 }

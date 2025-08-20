@@ -21,6 +21,7 @@ import { SummarizeTaskHandler } from "./handlers/SummarizeTaskHandler"
 import { UseMcpToolHandler } from "./handlers/UseMcpToolHandler"
 import { WebFetchToolHandler } from "./handlers/WebFetchToolHandler"
 import { WriteToFileToolHandler } from "./handlers/WriteToFileToolHandler"
+import type { IPartialBlockHandler, UIHelpers } from "./ToolExecutorCoordinator"
 import { ToolExecutorCoordinator } from "./ToolExecutorCoordinator"
 import { ToolValidator } from "./ToolValidator"
 import { ToolApprovalManager } from "./utils/ToolApprovalManager"
@@ -259,7 +260,22 @@ export class ToolExecutionManager {
 	 * Handle partial block streaming UI updates
 	 */
 	private async handlePartialBlock(block: ToolUse): Promise<void> {
-		// Handle different tools that support partial streaming
+		const handler = this.coordinator.getHandler(block.name)
+
+		// Check if handler supports partial blocks (hybrid approach)
+		if (handler && "handlePartialBlock" in handler) {
+			const uiHelpers: UIHelpers = {
+				ask: this.ask,
+				say: this.say,
+				removeClosingTag: this.removeClosingTag,
+				removeLastPartialMessageIfExistsWithType: this.removeLastPartialMessageIfExistsWithType,
+			}
+
+			await (handler as IPartialBlockHandler).handlePartialBlock(block, uiHelpers)
+			return
+		}
+
+		// Fallback to existing switch statement for tools that haven't been migrated yet
 		switch (block.name) {
 			case "read_file":
 			case "list_files":

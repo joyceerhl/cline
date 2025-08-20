@@ -1,9 +1,31 @@
 import type { ToolUse } from "@core/assistant-message"
+import { ClineAsk, ClineSay } from "@shared/ExtensionMessage"
+import { ClineAskResponse } from "@shared/WebviewMessage"
 import type { ToolResponse } from "../index"
 
 export interface IToolHandler {
 	readonly name: string
 	execute(config: any, block: ToolUse): Promise<ToolResponse>
+}
+
+export interface UIHelpers {
+	ask: (
+		type: ClineAsk,
+		text?: string,
+		partial?: boolean,
+	) => Promise<{
+		response: ClineAskResponse
+		text?: string
+		images?: string[]
+		files?: string[]
+	}>
+	say: (type: ClineSay, text?: string, images?: string[], files?: string[], partial?: boolean) => Promise<number | undefined>
+	removeClosingTag: (block: ToolUse, tag: any, text?: string) => string
+	removeLastPartialMessageIfExistsWithType: (type: "ask" | "say", askOrSay: any) => Promise<void>
+}
+
+export interface IPartialBlockHandler {
+	handlePartialBlock(block: ToolUse, uiHelpers: UIHelpers): Promise<void>
 }
 
 /**
@@ -25,6 +47,13 @@ export class ToolExecutorCoordinator {
 	 */
 	has(toolName: string): boolean {
 		return this.handlers.has(toolName)
+	}
+
+	/**
+	 * Get a handler for the given tool name
+	 */
+	getHandler(toolName: string): IToolHandler | undefined {
+		return this.handlers.get(toolName)
 	}
 
 	/**
