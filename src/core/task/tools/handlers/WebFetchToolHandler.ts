@@ -6,9 +6,9 @@ import { ToolUse, ToolUseName } from "../../../assistant-message"
 import { formatResponse } from "../../../prompts/responses"
 import { ToolResponse } from "../.."
 import { showNotificationForApprovalIfAutoApprovalEnabled } from "../../utils"
-import type { IPartialBlockHandler, IToolHandler, UIHelpers } from "../ToolExecutorCoordinator"
+import type { IFullyManagedTool, UIHelpers } from "../ToolExecutorCoordinator"
 
-export class WebFetchToolHandler implements IToolHandler, IPartialBlockHandler {
+export class WebFetchToolHandler implements IFullyManagedTool {
 	name = "web_fetch"
 	supportedTools: ToolUseName[] = ["web_fetch"]
 
@@ -28,14 +28,42 @@ export class WebFetchToolHandler implements IToolHandler, IPartialBlockHandler {
 			}
 			config.taskState.consecutiveMistakeCount = 0
 
-			// Show notification if auto-approval is enabled
-			if (config.autoApprovalSettings.enabled && config.autoApprovalSettings.enableNotifications) {
-				showSystemNotification({
-					subtitle: "Cline wants to fetch web content...",
-					message: `Cline is requesting to fetch content from: ${url}`,
-				})
+			// Create message for approval
+			const sharedMessageProps: ClineSayTool = {
+				tool: "webFetch",
+				path: url,
+				content: `Fetching URL: ${url}`,
+				operationIsLocatedInWorkspace: false,
+			}
+			const completeMessage = JSON.stringify(sharedMessageProps)
+
+			// Check auto-approval (web_fetch uses simple boolean, not array)
+			const autoApprove = config.autoApprovalSettings.enabled && config.autoApprovalSettings.actions.useBrowser
+
+			if (autoApprove) {
+				// Auto-approve flow
+				await config.callbacks.removeLastPartialMessageIfExistsWithType("ask", "tool")
+				await config.callbacks.say("tool", completeMessage, undefined, undefined, false)
+				config.taskState.consecutiveAutoApprovedRequestsCount++
+				telemetryService.captureToolUsage(config.ulid, "web_fetch", config.api.getModel().id, true, true)
+			} else {
+				// Manual approval flow
+				showNotificationForApprovalIfAutoApprovalEnabled(
+					`Cline wants to fetch content from ${url}`,
+					config.autoApprovalSettings.enabled,
+					config.autoApprovalSettings.enableNotifications,
+				)
+				await config.callbacks.removeLastPartialMessageIfExistsWithType("say", "tool")
+
+				const { response } = await config.callbacks.ask("tool", completeMessage, false)
+				if (response !== "yesButtonClicked") {
+					telemetryService.captureToolUsage(config.ulid, "web_fetch", config.api.getModel().id, false, false)
+					return "The user denied this operation."
+				}
+				telemetryService.captureToolUsage(config.ulid, "web_fetch", config.api.getModel().id, false, true)
 			}
 
+			// Execute the actual fetch
 			const urlContentFetcher = config.services?.urlContentFetcher as UrlContentFetcher
 
 			await urlContentFetcher.launchBrowser()

@@ -1,4 +1,4 @@
-import type { ToolUse } from "@core/assistant-message"
+import type { ToolUse, ToolUseName } from "@core/assistant-message"
 import { ClineAsk, ClineSay } from "@shared/ExtensionMessage"
 import { ClineAskResponse } from "@shared/WebviewMessage"
 import type { ToolResponse } from "../index"
@@ -22,10 +22,20 @@ export interface UIHelpers {
 	say: (type: ClineSay, text?: string, images?: string[], files?: string[], partial?: boolean) => Promise<number | undefined>
 	removeClosingTag: (block: ToolUse, tag: any, text?: string) => string
 	removeLastPartialMessageIfExistsWithType: (type: "ask" | "say", askOrSay: any) => Promise<void>
+
+	// Approval helpers for fully managed tools
+	shouldAutoApproveTool: (toolName: ToolUseName) => boolean
+	askApproval: (messageType: string, message: string) => Promise<boolean>
+	captureTelemetry: (toolName: ToolUseName, autoApproved: boolean, approved: boolean) => void
+	showNotificationIfEnabled: (message: string) => void
 }
 
 export interface IPartialBlockHandler {
 	handlePartialBlock(block: ToolUse, uiHelpers: UIHelpers): Promise<void>
+}
+
+export interface IFullyManagedTool extends IToolHandler, IPartialBlockHandler {
+	// Marker interface for tools that handle their own complete approval flow
 }
 
 /**

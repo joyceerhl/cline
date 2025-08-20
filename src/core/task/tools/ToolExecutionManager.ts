@@ -257,6 +257,31 @@ export class ToolExecutionManager {
 				say: this.say,
 				removeClosingTag: this.removeClosingTag,
 				removeLastPartialMessageIfExistsWithType: this.removeLastPartialMessageIfExistsWithType,
+				shouldAutoApproveTool: (toolName: ToolUseName) => {
+					const result = this.config.autoApprover?.shouldAutoApproveTool(toolName)
+					return Array.isArray(result) ? result[0] : result || false
+				},
+				askApproval: async (messageType: string, message: string) => {
+					return await this.askApproval(messageType as any, block, message)
+				},
+				captureTelemetry: (toolName: ToolUseName, autoApproved: boolean, approved: boolean) => {
+					const telemetryService = require("@services/posthog/PostHogClientProvider").telemetryService
+					telemetryService.captureToolUsage(
+						this.config.ulid,
+						toolName,
+						this.config.api.getModel().id,
+						autoApproved,
+						approved,
+					)
+				},
+				showNotificationIfEnabled: (message: string) => {
+					const { showNotificationForApprovalIfAutoApprovalEnabled } = require("../utils")
+					showNotificationForApprovalIfAutoApprovalEnabled(
+						message,
+						this.config.autoApprovalSettings.enabled,
+						this.config.autoApprovalSettings.enableNotifications,
+					)
+				},
 			}
 
 			await (handler as IPartialBlockHandler).handlePartialBlock(block, uiHelpers)
