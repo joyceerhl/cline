@@ -482,8 +482,9 @@ export class ToolExecutionManager {
 				break
 			case "ask_followup_question":
 			case "browser_action":
-				// These tools handle their own approval flow and UI messaging
-				await ToolExecutionStrategies.executeSimpleTool(block, this.coordinator, this.config, this.pushToolResult)
+				// These tools are fully self-managed
+				const result = await this.coordinator.execute(this.config, block)
+				this.pushToolResult(result, block)
 				break
 			default:
 				// For any other tools that might be added, just execute and push result
