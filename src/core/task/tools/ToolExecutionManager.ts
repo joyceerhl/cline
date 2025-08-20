@@ -295,9 +295,6 @@ export class ToolExecutionManager {
 			case "access_mcp_resource":
 				await this.handleMcpToolPartialBlock(block)
 				break
-			case "ask_followup_question":
-				await this.handleAskFollowupPartialBlock(block)
-				break
 			case "browser_action":
 				// Browser actions handle their own partial blocks in the handler
 				return
@@ -461,23 +458,6 @@ export class ToolExecutionManager {
 		// Don't auto-approve partial commands - wait for complete block
 		await this.removeLastPartialMessageIfExistsWithType("say", "command")
 		await this.ask("command" as ClineAsk, partialCommand, block.partial).catch(() => {})
-	}
-
-	/**
-	 * Handle partial blocks for ask_followup_question
-	 */
-	private async handleAskFollowupPartialBlock(block: ToolUse): Promise<void> {
-		const question = block.params.question || ""
-		const optionsRaw = block.params.options || "[]"
-		const partialMessage = JSON.stringify({
-			tool: "ask_followup_question",
-			question,
-			options: optionsRaw,
-		})
-
-		// For followup, just stream ask messages
-		await this.removeLastPartialMessageIfExistsWithType("say", "followup")
-		await this.ask("followup" as ClineAsk, partialMessage, block.partial).catch(() => {})
 	}
 
 	/**
