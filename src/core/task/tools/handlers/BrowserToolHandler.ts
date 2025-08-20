@@ -94,7 +94,7 @@ export class BrowserToolHandler implements IToolHandler {
 						config.taskState.consecutiveAutoApprovedRequestsCount++
 					} else {
 						// Show notification for approval if auto approval enabled
-						const { showNotificationForApprovalIfAutoApprovalEnabled } = require("@utils/notifications")
+						const { showNotificationForApprovalIfAutoApprovalEnabled } = require("../../utils")
 						showNotificationForApprovalIfAutoApprovalEnabled(
 							`Cline wants to use a browser and launch ${url}`,
 							config.autoApprovalSettings.enabled,
