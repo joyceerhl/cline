@@ -301,10 +301,6 @@ export class ToolExecutionManager {
 			case "new_rule":
 				await this.handleWriteToolPartialBlock(block)
 				break
-			case "use_mcp_tool":
-			case "access_mcp_resource":
-				await this.handleMcpToolPartialBlock(block)
-				break
 			case "browser_action":
 				// Browser actions handle their own partial blocks in the handler
 				return
@@ -447,22 +443,6 @@ export class ToolExecutionManager {
 			if (!block.partial) {
 				console.error("Error in partial write tool block:", error)
 			}
-		}
-	}
-
-	/**
-	 * Handle partial blocks for MCP tools
-	 */
-	private async handleMcpToolPartialBlock(block: ToolUse): Promise<void> {
-		const partialMessage = JSON.stringify(ToolMessageUtils.createMcpToolMessageProps(block, this.removeClosingTag))
-
-		// MCP tools use a different message type
-		if (this.config.autoApprovalSettings.enabled) {
-			await this.removeLastPartialMessageIfExistsWithType("ask", "use_mcp_server")
-			await this.say("use_mcp_server" as ClineSay, partialMessage, undefined, undefined, block.partial)
-		} else {
-			await this.removeLastPartialMessageIfExistsWithType("say", "use_mcp_server")
-			await this.ask("use_mcp_server" as ClineAsk, partialMessage, block.partial).catch(() => {})
 		}
 	}
 

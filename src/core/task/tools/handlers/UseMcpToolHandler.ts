@@ -1,9 +1,10 @@
 import type { ToolUse } from "@core/assistant-message"
 import { formatResponse } from "@core/prompts/responses"
+import { ClineAsk, ClineAskUseMcpServer } from "@shared/ExtensionMessage"
 import type { ToolResponse } from "../../index"
-import type { IToolHandler } from "../ToolExecutorCoordinator"
+import type { IPartialBlockHandler, IToolHandler, UIHelpers } from "../ToolExecutorCoordinator"
 
-export class UseMcpToolHandler implements IToolHandler {
+export class UseMcpToolHandler implements IToolHandler, IPartialBlockHandler {
 	readonly name = "use_mcp_tool"
 
 	constructor() {}
@@ -94,6 +95,30 @@ export class UseMcpToolHandler implements IToolHandler {
 			return formatResponse.toolResult(toolResultText, supportsImages ? toolResultImages : undefined)
 		} catch (error) {
 			return `Error executing MCP tool: ${(error as Error)?.message}`
+		}
+	}
+
+	async handlePartialBlock(block: ToolUse, uiHelpers: UIHelpers): Promise<void> {
+		const server_name = block.params.server_name
+		const tool_name = block.params.tool_name
+		const mcp_arguments = block.params.arguments
+
+		const partialMessage = JSON.stringify({
+			type: "use_mcp_tool",
+			serverName: uiHelpers.removeClosingTag(block, "server_name", server_name),
+			toolName: uiHelpers.removeClosingTag(block, "tool_name", tool_name),
+			arguments: uiHelpers.removeClosingTag(block, "arguments", mcp_arguments),
+		} satisfies ClineAskUseMcpServer)
+
+		// Check if tool should be auto-approved
+		const shouldAutoApprove = uiHelpers.shouldAutoApproveTool(block.name)
+
+		if (shouldAutoApprove) {
+			await uiHelpers.removeLastPartialMessageIfExistsWithType("ask", "use_mcp_server")
+			await uiHelpers.say("use_mcp_server" as any, partialMessage, undefined, undefined, block.partial)
+		} else {
+			await uiHelpers.removeLastPartialMessageIfExistsWithType("say", "use_mcp_server")
+			await uiHelpers.ask("use_mcp_server" as ClineAsk, partialMessage, block.partial).catch(() => {})
 		}
 	}
 }
