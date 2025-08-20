@@ -245,18 +245,6 @@ export class ToolExecutionManager {
 	}
 
 	/**
-	 * Create web fetch tool properties for UI display
-	 */
-	private createWebFetchProps(url: string) {
-		return {
-			tool: "webFetch",
-			path: url,
-			content: `Fetching URL: ${url}`,
-			operationIsLocatedInWorkspace: false,
-		}
-	}
-
-	/**
 	 * Handle partial block streaming UI updates
 	 */
 	private async handlePartialBlock(block: ToolUse): Promise<void> {
@@ -516,25 +504,6 @@ export class ToolExecutionManager {
 			case "ask_followup_question":
 			case "browser_action":
 				// These tools handle their own approval flow and UI messaging
-				await ToolExecutionStrategies.executeSimpleTool(block, this.coordinator, this.config, this.pushToolResult)
-				break
-			case "web_fetch":
-				// Send a UI tool message for ChatRow header (like file/read tools)
-				const url = block.params.url || ""
-				const props = this.createWebFetchProps(url)
-				const completeMessage = JSON.stringify(props)
-				if (await this.shouldAutoApproveToolWithPath("web_fetch")) {
-					await this.removeLastPartialMessageIfExistsWithType("ask", "tool")
-					await this.say("tool" as ClineSay, completeMessage, undefined, undefined, false)
-				} else {
-					await this.removeLastPartialMessageIfExistsWithType("say", "tool")
-					const didApprove = await this.askApproval("tool", block, completeMessage)
-					if (!didApprove) {
-						await this.saveCheckpoint()
-						return
-					}
-				}
-				// Now execute normally
 				await ToolExecutionStrategies.executeSimpleTool(block, this.coordinator, this.config, this.pushToolResult)
 				break
 			default:
