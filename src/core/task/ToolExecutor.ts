@@ -158,6 +158,7 @@ export class ToolExecutor {
 			messageState: this.messageStateHandler,
 			api: this.api,
 			autoApprovalSettings: this.autoApprovalSettings,
+			autoApprover: this.autoApprover,
 			browserSettings: this.browserSettings,
 			focusChainSettings: this.focusChainSettings,
 			services: {

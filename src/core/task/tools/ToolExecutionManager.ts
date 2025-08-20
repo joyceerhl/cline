@@ -301,9 +301,6 @@ export class ToolExecutionManager {
 			case "new_rule":
 				await this.handleWriteToolPartialBlock(block)
 				break
-			case "execute_command":
-				await this.handleCommandPartialBlock(block)
-				break
 			case "use_mcp_tool":
 			case "access_mcp_resource":
 				await this.handleMcpToolPartialBlock(block)
@@ -454,26 +451,6 @@ export class ToolExecutionManager {
 	}
 
 	/**
-	 * Handle partial blocks for command execution
-	 */
-	private async handleCommandPartialBlock(block: ToolUse): Promise<void> {
-		const command = block.params.command
-
-		// For commands, we need to wait for the requires_approval parameter before showing UI
-		// This is because the approval flow depends on that parameter
-		if (!block.params.requires_approval) {
-			return // Wait for complete block
-		}
-
-		// Command partial streaming is handled differently - just show the command
-		const partialCommand = this.removeClosingTag(block, "command", command)
-
-		// Don't auto-approve partial commands - wait for complete block
-		await this.removeLastPartialMessageIfExistsWithType("say", "command")
-		await this.ask("command" as ClineAsk, partialCommand, block.partial).catch(() => {})
-	}
-
-	/**
 	 * Handle partial blocks for MCP tools
 	 */
 	private async handleMcpToolPartialBlock(block: ToolUse): Promise<void> {
@@ -505,9 +482,6 @@ export class ToolExecutionManager {
 			case "replace_in_file":
 			case "new_rule":
 				await this.handleWriteToolExecution(block)
-				break
-			case "execute_command":
-				await this.handleCommandExecution(block)
 				break
 			case "use_mcp_tool":
 			case "access_mcp_resource":
@@ -642,24 +616,6 @@ export class ToolExecutionManager {
 		}
 
 		// Push the successful result
-		this.pushToolResult(result, block)
-	}
-
-	/**
-	 * Handle execution of command tool
-	 */
-	private async handleCommandExecution(block: ToolUse): Promise<void> {
-		// Execute the command through the handler
-		const result = await this.coordinator.execute(this.config, block)
-
-		// Check if handler returned an error
-		if (ToolValidationUtils.isValidationError(result)) {
-			this.pushToolResult(result, block)
-			return
-		}
-
-		// For commands, the handler manages the approval flow and execution
-		// The result is already the final formatted response
 		this.pushToolResult(result, block)
 	}
 
