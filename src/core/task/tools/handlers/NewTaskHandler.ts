@@ -3,12 +3,20 @@ import { formatResponse } from "@core/prompts/responses"
 import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { showSystemNotification } from "@integrations/notifications"
 import type { ToolResponse } from "../../index"
-import type { IToolHandler } from "../ToolExecutorCoordinator"
+import type { IPartialBlockHandler, IToolHandler, UIHelpers } from "../ToolExecutorCoordinator"
 
-export class NewTaskHandler implements IToolHandler {
+export class NewTaskHandler implements IToolHandler, IPartialBlockHandler {
 	readonly name = "new_task"
 
 	constructor() {}
+
+	/**
+	 * Handle partial block streaming for new_task
+	 */
+	async handlePartialBlock(block: ToolUse, uiHelpers: UIHelpers): Promise<void> {
+		const context = uiHelpers.removeClosingTag(block, "context", block.params.context)
+		await uiHelpers.ask("new_task", context, true).catch(() => {})
+	}
 
 	async execute(config: any, block: ToolUse): Promise<ToolResponse> {
 		// For partial blocks, don't execute yet
