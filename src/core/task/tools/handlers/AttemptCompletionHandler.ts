@@ -7,12 +7,38 @@ import { telemetryService } from "@services/posthog/PostHogClientProvider"
 import { findLastIndex } from "@shared/array"
 import { COMPLETION_RESULT_CHANGES_FLAG } from "@shared/ExtensionMessage"
 import type { ToolResponse } from "../../index"
-import type { IToolHandler } from "../ToolExecutorCoordinator"
+import type { IPartialBlockHandler, IToolHandler, UIHelpers } from "../ToolExecutorCoordinator"
 
-export class AttemptCompletionHandler implements IToolHandler {
+export class AttemptCompletionHandler implements IToolHandler, IPartialBlockHandler {
 	readonly name = "attempt_completion"
 
 	constructor() {}
+
+	/**
+	 * Handle partial block streaming for attempt_completion
+	 * Matches the original conditional logic structure for command vs no-command cases
+	 */
+	async handlePartialBlock(block: ToolUse, uiHelpers: UIHelpers): Promise<void> {
+		const result = block.params.result
+		const command = block.params.command
+
+		if (command) {
+			// the attempt_completion text is done, now we're getting command
+			// Original had complex logic here but most was commented out
+			// For now, we'll keep it simple and not stream command (matching original's disabled approach)
+			// But we can still stream result if we have it
+			if (result) {
+				const cleanResult = uiHelpers.removeClosingTag(block, "result", result)
+				await uiHelpers.say("completion_result", cleanResult, undefined, undefined, true)
+			}
+		} else {
+			// no command, still outputting partial result - MATCH ORIGINAL EXACTLY
+			if (result) {
+				const cleanResult = uiHelpers.removeClosingTag(block, "result", result)
+				await uiHelpers.say("completion_result", cleanResult, undefined, undefined, true)
+			}
+		}
+	}
 
 	async execute(config: any, block: ToolUse): Promise<ToolResponse> {
 		// For partial blocks, don't execute yet
