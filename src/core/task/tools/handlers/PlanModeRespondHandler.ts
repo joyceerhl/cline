@@ -3,12 +3,28 @@ import { formatResponse } from "@core/prompts/responses"
 import { telemetryService } from "@services/posthog/PostHogClientProvider"
 import { findLast, parsePartialArrayString } from "@shared/array"
 import type { ToolResponse } from "../../index"
-import type { IToolHandler } from "../ToolExecutorCoordinator"
+import type { IPartialBlockHandler, IToolHandler, UIHelpers } from "../ToolExecutorCoordinator"
 
-export class PlanModeRespondHandler implements IToolHandler {
+export class PlanModeRespondHandler implements IToolHandler, IPartialBlockHandler {
 	readonly name = "plan_mode_respond"
 
 	constructor() {}
+
+	/**
+	 * Handle partial block streaming for plan_mode_respond
+	 */
+	async handlePartialBlock(block: ToolUse, uiHelpers: UIHelpers): Promise<void> {
+		const response = block.params.response
+		const optionsRaw = block.params.options
+
+		const sharedMessage = {
+			response: uiHelpers.removeClosingTag(block, "response", response),
+			options: parsePartialArrayString(uiHelpers.removeClosingTag(block, "options", optionsRaw)),
+		}
+
+		await uiHelpers.removeLastPartialMessageIfExistsWithType("say", "plan_mode_respond")
+		await uiHelpers.ask("plan_mode_respond", JSON.stringify(sharedMessage), true).catch(() => {})
+	}
 
 	async execute(config: any, block: ToolUse): Promise<ToolResponse> {
 		// For partial blocks, don't execute yet
