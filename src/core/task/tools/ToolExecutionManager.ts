@@ -476,9 +476,12 @@ export class ToolExecutionManager {
 				await this.handleTaskManagementExecution(block)
 				break
 			case "condense":
-			case "summarize_task":
 			case "report_bug":
 				await this.handleContextAndUtilityExecution(block)
+				break
+			case "summarize_task":
+				// This tool is fully self-managed with IPartialBlockHandler
+				await ToolExecutionStrategies.executeSimpleTool(block, this.coordinator, this.config, this.pushToolResult)
 				break
 			case "ask_followup_question":
 			case "browser_action":
