@@ -3,10 +3,11 @@ import { formatResponse } from "@core/prompts/responses"
 import { ensureTaskDirectoryExists } from "@core/storage/disk"
 import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { showSystemNotification } from "@integrations/notifications"
+import { ClineAsk } from "@shared/ExtensionMessage"
 import type { ToolResponse } from "../../index"
-import type { IToolHandler } from "../ToolExecutorCoordinator"
+import type { IPartialBlockHandler, IToolHandler, UIHelpers } from "../ToolExecutorCoordinator"
 
-export class CondenseHandler implements IToolHandler {
+export class CondenseHandler implements IToolHandler, IPartialBlockHandler {
 	readonly name = "condense"
 
 	constructor() {}
@@ -72,5 +73,13 @@ export class CondenseHandler implements IToolHandler {
 
 			return formatResponse.toolResult(formatResponse.condense())
 		}
+	}
+
+	async handlePartialBlock(block: ToolUse, uiHelpers: UIHelpers): Promise<void> {
+		const context = block.params.context || ""
+		const cleanedContext = uiHelpers.removeClosingTag(block, "context", context)
+
+		await uiHelpers.removeLastPartialMessageIfExistsWithType("say", "condense")
+		await uiHelpers.ask("condense" as ClineAsk, cleanedContext, block.partial).catch(() => {})
 	}
 }
