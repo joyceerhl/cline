@@ -127,11 +127,19 @@ export class ToolExecutionManager {
 		coordinator.register(new AskFollowupQuestionToolHandler())
 		coordinator.register(new WebFetchToolHandler())
 
-		// Register WriteToFileToolHandler for all three file tools
+		// Register WriteToFileToolHandler for all three file tools (now fully self-managed)
 		const writeHandler = new WriteToFileToolHandler(validator)
 		coordinator.register(writeHandler) // registers as "write_to_file"
-		coordinator.register({ name: "replace_in_file", execute: writeHandler.execute.bind(writeHandler) })
-		coordinator.register({ name: "new_rule", execute: writeHandler.execute.bind(writeHandler) })
+		coordinator.register({
+			name: "replace_in_file",
+			execute: writeHandler.execute.bind(writeHandler),
+			handlePartialBlock: writeHandler.handlePartialBlock.bind(writeHandler),
+		} as any) // Cast to any to allow handlePartialBlock property
+		coordinator.register({
+			name: "new_rule",
+			execute: writeHandler.execute.bind(writeHandler),
+			handlePartialBlock: writeHandler.handlePartialBlock.bind(writeHandler),
+		} as any) // Cast to any to allow handlePartialBlock property
 
 		coordinator.register(new ListCodeDefinitionNamesToolHandler(validator))
 		coordinator.register(new SearchFilesToolHandler(validator))
@@ -261,6 +269,7 @@ export class ToolExecutionManager {
 					const result = this.config.autoApprover?.shouldAutoApproveTool(toolName)
 					return Array.isArray(result) ? result[0] : result || false
 				},
+				shouldAutoApproveToolWithPath: this.shouldAutoApproveToolWithPath,
 				askApproval: async (messageType: string, message: string) => {
 					return await this.askApproval(messageType as any, block, message)
 				},
@@ -282,6 +291,7 @@ export class ToolExecutionManager {
 						this.config.autoApprovalSettings.enableNotifications,
 					)
 				},
+				getConfig: () => this.config,
 			}
 
 			await (handler as IPartialBlockHandler).handlePartialBlock(block, uiHelpers)
@@ -295,11 +305,6 @@ export class ToolExecutionManager {
 			case "list_code_definition_names":
 			case "search_files":
 				await this.handleFileToolPartialBlock(block)
-				break
-			case "write_to_file":
-			case "replace_in_file":
-			case "new_rule":
-				await this.handleWriteToolPartialBlock(block)
 				break
 			case "browser_action":
 				// Browser actions handle their own partial blocks in the handler
@@ -335,133 +340,32 @@ export class ToolExecutionManager {
 	}
 
 	/**
-	 * Handle partial blocks for write-related tools
-	 */
-	private async handleWriteToolPartialBlock(block: ToolUse): Promise<void> {
-		const relPath = block.params.path
-		const content = block.params.content // for write_to_file
-		let diff = block.params.diff // for replace_in_file
-
-		// Early return if we don't have enough data yet
-		if (!relPath || (!content && !diff)) {
-			// Wait until we have the path and either content or diff
-			return
-		}
-
-		// Check if file exists to determine the correct UI message
-		let fileExists: boolean
-		if (this.config.services.diffViewProvider.editType !== undefined) {
-			fileExists = this.config.services.diffViewProvider.editType === "modify"
-		} else {
-			const absolutePath = path.resolve(this.config.cwd, relPath)
-			fileExists = await require("@utils/fs").fileExistsAtPath(absolutePath)
-			this.config.services.diffViewProvider.editType = fileExists ? "modify" : "create"
-		}
-
-		const sharedMessageProps = await ToolMessageUtils.createWriteToolMessageProps(
-			block,
-			this.config.cwd,
-			fileExists,
-			this.removeClosingTag,
-		)
-
-		const partialMessage = JSON.stringify(sharedMessageProps)
-
-		if (await this.shouldAutoApproveToolWithPath(block.name, block.params.path)) {
-			await this.removeLastPartialMessageIfExistsWithType("ask", "tool")
-			await this.say("tool" as ClineSay, partialMessage, undefined, undefined, block.partial)
-		} else {
-			await this.removeLastPartialMessageIfExistsWithType("say", "tool")
-			await this.ask("tool" as ClineAsk, partialMessage, block.partial).catch(() => {})
-		}
-
-		// Now handle the actual streaming of content to the diff view
-		try {
-			// Construct newContent from diff or content
-			let newContent: string = ""
-
-			if (diff) {
-				// Handle replace_in_file with diff construction
-				if (!this.config.api.getModel().id.includes("claude")) {
-					// deepseek models tend to use unescaped html entities in diffs
-					const { fixModelHtmlEscaping, removeInvalidChars } = require("@utils/string")
-					diff = fixModelHtmlEscaping(diff)
-					diff = removeInvalidChars(diff)
-				}
-
-				// Open the editor if not done already
-				if (!this.config.services.diffViewProvider.isEditing) {
-					await this.config.services.diffViewProvider.open(relPath)
-				}
-
-				// For partial diffs, we need to construct the content incrementally
-				// We'll use constructNewFileContent with partial flag
-				const { constructNewFileContent } = require("@core/assistant-message/diff")
-				try {
-					newContent = await constructNewFileContent(
-						diff,
-						this.config.services.diffViewProvider.originalContent || "",
-						!block.partial, // Pass the partial flag correctly
-					)
-				} catch (error) {
-					// For partial blocks, we might get incomplete diffs, so we'll just skip errors
-					// and wait for more content
-					if (!block.partial) {
-						throw error
-					}
-					return
-				}
-			} else if (content) {
-				// Handle write_to_file with direct content
-				newContent = content
-
-				// Pre-processing newContent for cases where weaker models might add artifacts
-				if (newContent.startsWith("```")) {
-					newContent = newContent.split("\n").slice(1).join("\n").trim()
-				}
-				if (newContent.endsWith("```")) {
-					newContent = newContent.split("\n").slice(0, -1).join("\n").trim()
-				}
-
-				if (!this.config.api.getModel().id.includes("claude")) {
-					const { fixModelHtmlEscaping, removeInvalidChars } = require("@utils/string")
-					newContent = fixModelHtmlEscaping(newContent)
-					newContent = removeInvalidChars(newContent)
-				}
-			}
-
-			// Open the editor if not already open
-			if (!this.config.services.diffViewProvider.isEditing) {
-				await this.config.services.diffViewProvider.open(relPath)
-			}
-
-			// Stream the content to the diff view (false = don't finalize yet)
-			await this.config.services.diffViewProvider.update(newContent, false)
-		} catch (error) {
-			// For partial blocks, we'll silently handle errors and wait for more content
-			// The complete block handler will handle actual errors
-			if (!block.partial) {
-				console.error("Error in partial write tool block:", error)
-			}
-		}
-	}
-
-	/**
 	 * Handle complete block execution with approval flow
 	 */
 	private async handleCompleteBlock(block: ToolUse): Promise<void> {
-		// Handle different tool types with their specific approval flows
+		// Check if handler is fully self-managed
+		const handler = this.coordinator.getHandler(block.name)
+		if (handler && "handlePartialBlock" in handler) {
+			// Fully self-managed tools handle their own approval flow
+			const result = await this.coordinator.execute(this.config, block)
+			this.pushToolResult(result, block)
+
+			// Handle focus chain updates
+			if (!block.partial && this.config.focusChainSettings.enabled) {
+				await this.updateFCListFromToolResponse(block.params.task_progress)
+			}
+
+			await this.saveCheckpoint()
+			return
+		}
+
+		// Handle different tool types with their specific approval flows (legacy tools)
 		switch (block.name) {
 			case "read_file":
 			case "list_files":
 			case "list_code_definition_names":
 			case "search_files":
 				await this.handleFileToolExecution(block)
-				break
-			case "write_to_file":
-			case "replace_in_file":
-			case "new_rule":
-				await this.handleWriteToolExecution(block)
 				break
 			case "use_mcp_tool":
 			case "access_mcp_resource":
@@ -476,18 +380,7 @@ export class ToolExecutionManager {
 				await this.handleTaskManagementExecution(block)
 				break
 			case "condense":
-			case "report_bug":
 				await this.handleContextAndUtilityExecution(block)
-				break
-			case "summarize_task":
-				// This tool is fully self-managed with IPartialBlockHandler
-				await ToolExecutionStrategies.executeSimpleTool(block, this.coordinator, this.config, this.pushToolResult)
-				break
-			case "ask_followup_question":
-			case "browser_action":
-				// These tools are fully self-managed
-				const result = await this.coordinator.execute(this.config, block)
-				this.pushToolResult(result, block)
 				break
 			default:
 				// For any other tools that might be added, just execute and push result
@@ -537,69 +430,6 @@ export class ToolExecutionManager {
 		}
 
 		// Tool was approved, push the result
-		this.pushToolResult(result, block)
-	}
-
-	/**
-	 * Handle execution of write-related tools (write_to_file, replace_in_file, new_rule)
-	 */
-	private async handleWriteToolExecution(block: ToolUse): Promise<void> {
-		const relPath = block.params.path
-		const content = block.params.content || block.params.diff
-
-		// Validate path parameter using error handler
-		if (
-			await ToolErrorHandler.handleValidationError(
-				block,
-				null, // No result yet, just checking params
-				this.config,
-				this.pushToolResult,
-				this.saveCheckpoint,
-				this.sayAndCreateMissingParamError,
-			)
-		) {
-			return // Error was handled
-		}
-
-		// Check if file exists for UI messaging
-		const absolutePath = path.resolve(this.config.cwd, relPath || "")
-		const fileExists =
-			this.config.services.diffViewProvider.editType === "modify" || (await this.config.services.diffViewProvider.isEditing)
-				? this.config.services.diffViewProvider.editType === "modify"
-				: await require("@utils/fs").fileExistsAtPath(absolutePath)
-
-		// Handle approval flow using the approval manager with detailed feedback support
-		const approvalResult = await this.approvalManager.handleWriteToolApproval(
-			block,
-			relPath || "",
-			fileExists,
-			content || "",
-			this.pushToolResult,
-			this.saveCheckpoint,
-		)
-
-		if (!approvalResult.approved) {
-			// Reset diff view if user rejected
-			await ToolErrorHandler.handleDiffViewReset(this.config)
-			// If rejection was already handled (with detailed message), just return
-			if (approvalResult.rejectionHandled) {
-				return
-			}
-			// Otherwise push a simple rejection message
-			this.pushToolResult("The user rejected this operation.", block)
-			return
-		}
-
-		// User approved or auto-approved, now execute the tool
-		const result = await this.coordinator.execute(this.config, block)
-
-		// Check if handler returned an error
-		if (ToolValidationUtils.isValidationError(result)) {
-			this.pushToolResult(result, block)
-			return
-		}
-
-		// Push the successful result
 		this.pushToolResult(result, block)
 	}
 

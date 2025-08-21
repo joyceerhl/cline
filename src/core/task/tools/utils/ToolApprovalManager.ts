@@ -65,47 +65,6 @@ export class ToolApprovalManager {
 			return await this.handleManualApproval("tool", completeMessage, block, notificationMessage)
 		}
 	}
-
-	/**
-	 * Handle approval flow for write-related tools (write_to_file, replace_in_file, new_rule)
-	 * Returns an object with approval status and any rejection message
-	 */
-	async handleWriteToolApproval(
-		block: ToolUse,
-		relPath: string,
-		fileExists: boolean,
-		content: string,
-		pushToolResult: (content: any, block: ToolUse) => void,
-		saveCheckpoint: () => Promise<void>,
-	): Promise<{ approved: boolean; rejectionHandled?: boolean }> {
-		const sharedMessageProps = {
-			tool: fileExists ? "editedExistingFile" : "newFileCreated",
-			path: getReadablePath(this.config.cwd, relPath),
-			content: content,
-			operationIsLocatedInWorkspace: await isLocatedInWorkspace(relPath),
-		}
-
-		const completeMessage = JSON.stringify(sharedMessageProps)
-
-		if (await this.shouldAutoApproveToolWithPath(block.name, relPath)) {
-			await this.handleAutoApproval("tool", completeMessage, block)
-			// Add diagnostic delay after auto-approval
-			await setTimeoutPromise(3_500)
-			return { approved: true }
-		} else {
-			const notificationMessage = `Cline wants to ${fileExists ? "edit" : "create"} ${path.basename(relPath)}`
-			return await this.handleManualWriteApproval(
-				"tool",
-				completeMessage,
-				block,
-				notificationMessage,
-				fileExists,
-				pushToolResult,
-				saveCheckpoint,
-			)
-		}
-	}
-
 	/**
 	 * Handle approval flow for MCP tools (use_mcp_tool, access_mcp_resource)
 	 */
@@ -169,84 +128,6 @@ export class ToolApprovalManager {
 
 		this.captureTelemetry(block, false, true)
 		return true
-	}
-
-	/**
-	 * Handle manual approval flow for write tools with detailed feedback
-	 */
-	private async handleManualWriteApproval(
-		messageType: string,
-		message: string,
-		block: ToolUse,
-		notificationMessage: string,
-		fileExists: boolean,
-		pushToolResult: (content: any, block: ToolUse) => void,
-		saveCheckpoint: () => Promise<void>,
-	): Promise<{ approved: boolean; rejectionHandled?: boolean }> {
-		showNotificationForApprovalIfAutoApprovalEnabled(
-			notificationMessage,
-			this.config.autoApprovalSettings.enabled,
-			this.config.autoApprovalSettings.enableNotifications,
-		)
-
-		await this.removeLastPartialMessageIfExistsWithType("say", messageType)
-
-		// Ask for approval with full context
-		const { response, text, images, files } = await this.ask(messageType as ClineAsk, message, false)
-
-		if (response !== "yesButtonClicked") {
-			// User either sent a message or pressed reject button
-			const fileDeniedNote = fileExists
-				? "The file was not updated, and maintains its original contents."
-				: "The file was not created."
-			pushToolResult(`The user denied this operation. ${fileDeniedNote}`, block)
-
-			// Process additional feedback if provided
-			if (text || (images && images.length > 0) || (files && files.length > 0)) {
-				let fileContentString = ""
-				if (files && files.length > 0) {
-					fileContentString = await processFilesIntoText(files)
-				}
-
-				// Push additional feedback to tool result
-				const feedbackContent = formatResponse.toolResult(
-					`The user provided feedback on the denied operation:\n<feedback>\n${text}\n</feedback>`,
-					images,
-					fileContentString,
-				)
-				pushToolResult(feedbackContent, block)
-
-				await this.say("user_feedback", text, images, files)
-				await saveCheckpoint()
-			}
-
-			// Set the rejection flag
-			this.config.taskState.didRejectTool = true
-			this.captureTelemetry(block, false, false)
-			return { approved: false, rejectionHandled: true }
-		} else {
-			// User hit the approve button, may have provided feedback
-			if (text || (images && images.length > 0) || (files && files.length > 0)) {
-				let fileContentString = ""
-				if (files && files.length > 0) {
-					fileContentString = await processFilesIntoText(files)
-				}
-
-				// Push additional feedback to tool result
-				const feedbackContent = formatResponse.toolResult(
-					`The user provided feedback:\n<feedback>\n${text}\n</feedback>`,
-					images,
-					fileContentString,
-				)
-				pushToolResult(feedbackContent, block)
-
-				await this.say("user_feedback", text, images, files)
-				await saveCheckpoint()
-			}
-
-			this.captureTelemetry(block, false, true)
-			return { approved: true }
-		}
 	}
 
 	/**

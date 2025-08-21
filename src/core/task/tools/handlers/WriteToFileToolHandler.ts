@@ -2,18 +2,139 @@ import { setTimeout as setTimeoutPromise } from "node:timers/promises"
 import type { ToolUse } from "@core/assistant-message"
 import { constructNewFileContent } from "@core/assistant-message/diff"
 import { formatResponse } from "@core/prompts/responses"
+import { processFilesIntoText } from "@integrations/misc/extract-text"
 import { telemetryService } from "@services/posthog/PostHogClientProvider"
+import { ClineSayTool } from "@shared/ExtensionMessage"
 import { fileExistsAtPath } from "@utils/fs"
+import { getReadablePath, isLocatedInWorkspace } from "@utils/path"
 import { fixModelHtmlEscaping, removeInvalidChars } from "@utils/string"
 import * as path from "path"
 import type { ToolResponse } from "../../index"
-import type { IToolHandler } from "../ToolExecutorCoordinator"
+import { showNotificationForApprovalIfAutoApprovalEnabled } from "../../utils"
+import type { IFullyManagedTool, UIHelpers } from "../ToolExecutorCoordinator"
 import type { ToolValidator } from "../ToolValidator"
 
-export class WriteToFileToolHandler implements IToolHandler {
+export class WriteToFileToolHandler implements IFullyManagedTool {
 	readonly name = "write_to_file" // This handler supports write_to_file, replace_in_file, and new_rule
 
 	constructor(private validator: ToolValidator) {}
+
+	async handlePartialBlock(block: ToolUse, uiHelpers: UIHelpers): Promise<void> {
+		const relPath = block.params.path
+		const content = block.params.content // for write_to_file
+		let diff = block.params.diff // for replace_in_file
+
+		// Early return if we don't have enough data yet
+		if (!relPath || (!content && !diff)) {
+			// Wait until we have the path and either content or diff
+			return
+		}
+
+		// Get config access for services
+		const config = uiHelpers.getConfig()
+
+		// Check clineignore access first
+		const accessValidation = this.validator.checkClineIgnorePath(relPath)
+		if (!accessValidation.ok) {
+			// Show error and return early
+			await uiHelpers.say("clineignore_error", relPath)
+			return
+		}
+
+		// Check if file exists to determine the correct UI message
+		let fileExists: boolean
+		if (config.services.diffViewProvider.editType !== undefined) {
+			fileExists = config.services.diffViewProvider.editType === "modify"
+		} else {
+			const absolutePath = path.resolve(config.cwd, relPath)
+			fileExists = await fileExistsAtPath(absolutePath)
+			config.services.diffViewProvider.editType = fileExists ? "modify" : "create"
+		}
+
+		// Create and show partial UI message
+		const sharedMessageProps: ClineSayTool = {
+			tool: fileExists ? "editedExistingFile" : "newFileCreated",
+			path: getReadablePath(config.cwd, uiHelpers.removeClosingTag(block, "path", relPath)),
+			content: uiHelpers.removeClosingTag(block, block.name === "replace_in_file" ? "diff" : "content", content || diff),
+			operationIsLocatedInWorkspace: await isLocatedInWorkspace(relPath),
+		}
+
+		const partialMessage = JSON.stringify(sharedMessageProps)
+
+		// Handle auto-approval vs manual approval for partial
+		if (await uiHelpers.shouldAutoApproveToolWithPath(block.name, relPath)) {
+			await uiHelpers.removeLastPartialMessageIfExistsWithType("ask", "tool")
+			await uiHelpers.say("tool", partialMessage, undefined, undefined, block.partial)
+		} else {
+			await uiHelpers.removeLastPartialMessageIfExistsWithType("say", "tool")
+			await uiHelpers.ask("tool", partialMessage, block.partial).catch(() => {})
+		}
+
+		// CRITICAL: Add the missing real-time diff view streaming logic from original code
+		try {
+			// Construct newContent from diff or content
+			let newContent: string = ""
+
+			if (diff) {
+				// Handle replace_in_file with diff construction
+				if (!config.api.getModel().id.includes("claude")) {
+					// deepseek models tend to use unescaped html entities in diffs
+					diff = fixModelHtmlEscaping(diff)
+					diff = removeInvalidChars(diff)
+				}
+
+				// Open the editor if not done already - CRITICAL for real-time streaming
+				if (!config.services.diffViewProvider.isEditing) {
+					await config.services.diffViewProvider.open(relPath)
+				}
+
+				try {
+					newContent = await constructNewFileContent(
+						diff,
+						config.services.diffViewProvider.originalContent || "",
+						!block.partial, // Pass the partial flag correctly
+					)
+				} catch (error) {
+					// For partial blocks, we might get incomplete diffs, so we'll just skip errors
+					// and wait for more content
+					if (!block.partial) {
+						throw error
+					}
+					return
+				}
+			} else if (content) {
+				// Handle write_to_file with direct content
+				newContent = content
+
+				// Pre-processing newContent for cases where weaker models might add artifacts
+				if (newContent.startsWith("```")) {
+					newContent = newContent.split("\n").slice(1).join("\n").trim()
+				}
+				if (newContent.endsWith("```")) {
+					newContent = newContent.split("\n").slice(0, -1).join("\n").trim()
+				}
+
+				if (!config.api.getModel().id.includes("claude")) {
+					newContent = fixModelHtmlEscaping(newContent)
+					newContent = removeInvalidChars(newContent)
+				}
+			}
+
+			// CRITICAL: Open editor and stream content in real-time (from original code)
+			if (!config.services.diffViewProvider.isEditing) {
+				// Open the editor and prepare to stream content in
+				await config.services.diffViewProvider.open(relPath)
+			}
+			// Editor is open, stream content in real-time (false = don't finalize yet)
+			await config.services.diffViewProvider.update(newContent, false)
+		} catch (error) {
+			// For partial blocks, we'll silently handle errors and wait for more content
+			// The complete block handler will handle actual errors
+			if (!block.partial) {
+				console.error("Error in partial write tool block:", error)
+			}
+		}
+	}
 
 	async execute(config: any, block: ToolUse): Promise<ToolResponse> {
 		// For partial blocks, return empty string to let coordinator handle UI
@@ -44,7 +165,8 @@ export class WriteToFileToolHandler implements IToolHandler {
 		// Check clineignore access
 		const accessValidation = this.validator.checkClineIgnorePath(relPath)
 		if (!accessValidation.ok) {
-			return `Error: File access blocked by .clineignore rules: ${relPath}`
+			await config.callbacks.say("clineignore_error", relPath)
+			return formatResponse.toolError(formatResponse.clineIgnoreError(relPath))
 		}
 
 		config.taskState.consecutiveMistakeCount = 0
@@ -57,6 +179,79 @@ export class WriteToFileToolHandler implements IToolHandler {
 		} else {
 			fileExists = await fileExistsAtPath(absolutePath)
 			config.services.diffViewProvider.editType = fileExists ? "modify" : "create"
+		}
+
+		// Handle approval flow
+		const sharedMessageProps: ClineSayTool = {
+			tool: fileExists ? "editedExistingFile" : "newFileCreated",
+			path: getReadablePath(config.cwd, relPath),
+			content: diff || content,
+			operationIsLocatedInWorkspace: await isLocatedInWorkspace(relPath),
+		}
+
+		const completeMessage = JSON.stringify(sharedMessageProps)
+
+		if (await config.callbacks.shouldAutoApproveToolWithPath(block.name, relPath)) {
+			// Auto-approval flow
+			await config.callbacks.removeLastPartialMessageIfExistsWithType("ask", "tool")
+			await config.callbacks.say("tool", completeMessage, undefined, undefined, false)
+			config.taskState.consecutiveAutoApprovedRequestsCount++
+
+			// Capture telemetry
+			telemetryService.captureToolUsage(config.ulid, block.name, config.api.getModel().id, true, true)
+
+			// Add diagnostic delay
+			await setTimeoutPromise(3_500)
+		} else {
+			// Manual approval flow with detailed feedback handling
+			const notificationMessage = `Cline wants to ${fileExists ? "edit" : "create"} ${path.basename(relPath)}`
+
+			// Show notification
+			showNotificationForApprovalIfAutoApprovalEnabled(
+				notificationMessage,
+				config.autoApprovalSettings.enabled,
+				config.autoApprovalSettings.enableNotifications,
+			)
+
+			await config.callbacks.removeLastPartialMessageIfExistsWithType("say", "tool")
+
+			// Ask for approval with full feedback handling
+			const { response, text, images, files } = await config.callbacks.ask("tool", completeMessage, false)
+
+			if (response !== "yesButtonClicked") {
+				// Handle rejection with detailed messages
+				const fileDeniedNote = fileExists
+					? "The file was not updated, and maintains its original contents."
+					: "The file was not created."
+
+				// Process user feedback if provided
+				if (text || (images && images.length > 0) || (files && files.length > 0)) {
+					let fileContentString = ""
+					if (files && files.length > 0) {
+						fileContentString = await processFilesIntoText(files)
+					}
+
+					await config.callbacks.say("user_feedback", text, images, files)
+					await config.callbacks.saveCheckpoint()
+				}
+
+				config.taskState.didRejectTool = true
+				telemetryService.captureToolUsage(config.ulid, block.name, config.api.getModel().id, false, false)
+				return `The user denied this operation. ${fileDeniedNote}`
+			} else {
+				// Handle approval feedback if provided
+				if (text || (images && images.length > 0) || (files && files.length > 0)) {
+					let fileContentString = ""
+					if (files && files.length > 0) {
+						fileContentString = await processFilesIntoText(files)
+					}
+
+					await config.callbacks.say("user_feedback", text, images, files)
+					await config.callbacks.saveCheckpoint()
+				}
+
+				telemetryService.captureToolUsage(config.ulid, block.name, config.api.getModel().id, false, true)
+			}
 		}
 
 		try {

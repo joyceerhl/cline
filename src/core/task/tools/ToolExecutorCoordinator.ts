@@ -25,9 +25,13 @@ export interface UIHelpers {
 
 	// Approval helpers for fully managed tools
 	shouldAutoApproveTool: (toolName: ToolUseName) => boolean
+	shouldAutoApproveToolWithPath: (toolName: ToolUseName, path?: string) => Promise<boolean>
 	askApproval: (messageType: string, message: string) => Promise<boolean>
 	captureTelemetry: (toolName: ToolUseName, autoApproved: boolean, approved: boolean) => void
 	showNotificationIfEnabled: (message: string) => void
+
+	// Config access for services
+	getConfig: () => any
 }
 
 export interface IPartialBlockHandler {
